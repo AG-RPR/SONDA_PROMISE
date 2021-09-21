@@ -1,10 +1,4 @@
 clc; sca; close all; clear all; commandwindow;
-smooth = readtable([pwd '/trajectories.csv']); % load the (for now only smooth) trajectory from a .csv file into a table. Should be in the same folder as this script
-smooth = smooth{:,:}; % vectorize the table
-x_smooth = smooth(:,1); % split x and y
-y_smooth = smooth(:,2);
-x_resp = nan(length(x_smooth),1); % allocate vectors for x and y gaze response (column vectors, watch out during the analysis)
-y_resp = nan(length(y_smooth),1);
 %% default parameters
 if isunix % avoid hardcoding paths so that this trick should be enough to pass from one OS to another
     myPath = [pwd '/'];
@@ -12,18 +6,16 @@ else
     myPath = [pwd '\'];
 end
 cd(myPath); % go to path location
-dummymode = 1; % flag to switch on / off dummymode (trial without eye-tracker)
+dummymode = 0; % flag to switch on / off dummymode (trial without eye-tracker) ---> SET BEFORE STARTING
 subj ='demo'; % string variable for subject name
-pursuit_cond = 0; %0: smooth | 1: saccadic | 2: both]
-svfd_number = [0]; % number of gaze contingent simulated visual field defect conditions
+pursuit_cond = 2; %0: smooth | 1: saccadic | 2: both]
+svfd_number = 0; % number of gaze contingent simulated visual field defect conditions
 background = 127; % THIS VALUE MUST BE ADAPTED FROM THE CALIBRATION OF THE MONITOR
-contrast = [10 50]; % contrast levels, in percentage
-monitWidth = 540; % physical width of the display monitor (mm)
-viewDist = 600; % viewing distance of the observer (mm)
-skip_trial = 0; % flag to allow the user to skip trial
-go_out = 0; % flag to allow the user to quit a session any time
+contrast = [10 100]; % contrast levels, in percentage
 contrast_levels = length(contrast); % number of contrast levels
-%%
+monitWidth = 540; % physical width of the display monitor (mm) ---> MEASURE BEFORE STARTING
+viewDist = 600; % viewing distance of the observer (mm) ---> MEASURE BEFORE STARTING
+%% custom parameters
 default_params = input('Use default paramters? [0: NO| 1: YES]:...');
 if default_params == 0
     pursuit_cond =  input('Which pursuit type do you want to test? [0: smooth | 1: saccadic | 2: both]:...');
@@ -34,8 +26,16 @@ if default_params == 0
         contrast(c) = input(['Contrast #' num2str(c) ' [percentage 0-100]:...']);
     end
     svfd_number = input('How many simulated visual field conditions? [0 = no sVFD | any integer number]:...');
-    viewDist = input('Viewing distance? [in mm]:...');
-    monitWidth = input('Physical dimension of the monitor width? [in mm]:...');
+end
+%% load trajectories
+load('smooth_1.mat');
+x_smooth(:,1) = x(1:2400); % short, just for trying it out
+y_smooth(:,1) = y(1:2400);
+
+for i = 1:3
+load(['saccadic_' num2str(i) '.mat']);
+x_sacc(:,i) = x(1:length(x_smooth)); % REMOVE THIS INDEX ONCE THE TIME SERIES ARE READY
+y_sacc(:,i) = y(1:length(y_smooth));
 end
 %% Initialze PTB (PsychToolBox) screen & miscellaneous graphic options
 Screen('Preference', 'SkipSyncTests', 1); % skip PTB sync-test
@@ -44,7 +44,7 @@ Screen('Preference', 'VisualDebuglevel', 3); % skip PTB warning
 screenNumber = max(Screen('Screens'));  % get the pointer to the screen (select secondary screen in case of multiple displays)
 white = WhiteIndex(screenNumber); % define white (usually 255)
 grey=GrayIndex(screenNumber); % define gray (usually 127)
-[w, windowRect] = Screen('OpenWindow', screenNumber, grey); % open the window object and get a pointer to access that window, initialize the window with a grey background
+[w, windowRect] = Screen('OpenWindow', 1, background); % open the window object and get a pointer to access that window, initialize the window with a grey background
 Screen('Flip', w); % initial flip to clean the screen
 ifi = Screen('GetFlipInterval', w); % get interframe interval
 hz = 1/ifi; % get refresh rate
@@ -74,6 +74,8 @@ y_mouse = yCenter;
 %% Offset trajectories to make them start from the center
 x_smooth = x_smooth + xCenter;
 y_smooth = y_smooth + yCenter;
+x_sacc = x_sacc + xCenter;
+y_sacc = y_sacc + yCenter;
 %% Simulating visual field defects
 % Empty for now, it will read a matrix calculated with the new HFA-> sVFD
 % conversion method and transform it into a PTB texture.
@@ -90,7 +92,7 @@ end
 Eyelink('Command', 'link_sample_data = LEFT,RIGHT,GAZE,AREA'); % make sure that we get gaze data from the Eyelink (this is some kind of data formatting)
 EyelinkDoTrackerSetup(el); % calibrate the eye-tracker (standard 9-point calibration)
 EyelinkDoDriftCorrection(el); % do a final calibration check using drift correction
-Screen('FillRect',w,grey); % clean the screen and fill it with a grey background
+Screen('FillRect',w,background); % clean the screen and fill it with the specified background
 Screen('Flip', w);
 edfFile=[subj '.edf']; %open file with subject name to record data to
 Eyelink('Openfile', edfFile);
@@ -110,10 +112,12 @@ for p = 1:length(pursuit_trial)
     if pursuit_trial(p) == 0 % smooth trajectory, single trial
         n_trials = 1;
         pat_string = 'sm';
-        x_stim = x_smooth;
-        y_stim = y_smooth;
+        x_pos = x_smooth;
+        y_pos = y_smooth;
     elseif pursuit_trial(p) == 1 % saccadic trajectory, 3 trials
         n_trials = 3;
+        x_pos = x_sacc;
+        y_pos = y_sacc;
         pat_string = 'sc';
     end
     for c = 1:contrast_levels
@@ -133,15 +137,15 @@ for p = 1:length(pursuit_trial)
             SetMouse(xCenter,yCenter,w);
             HideCursor;
             Eyelink('Message', ['START_TRIAL_' num2str(t) '_' pat_string '_contrast' num2str(contrast(c))]); % mark zero-plot time in edf fil for current trial
-            for i = 1:length(x_stim)
-                rect_blob=CenterRectOnPoint(rect_blob,x_stim(i),y_stim(i));
+            for i = 1:length(x_pos(:,t))
+                rect_blob=CenterRectOnPoint(rect_blob,x_pos(i,t),y_pos(i,t));
                 Screen('DrawTexture', w, tex_blob(c),[],rect_blob); % print stimulus on screen
                 if dummymode % if NO Eyeleink is available
                     rectim = CenterRectOnPoint(rectim, x_mouse, y_mouse);
                     Screen('FrameOval', w, [0 0 0], rectim, 2, 2);
                     [x_mouse, y_mouse]=GetMouse(w);
-                    x_resp(i)=x_mouse;
-                    y_resp(i)=y_mouse;
+                    x_resp(i,t)=x_mouse;
+                    y_resp(i,t)=y_mouse;
                 else % if the EyeLink is connected
                     if Eyelink( 'NewFloatSampleAvailable') > 0  % check for presence of a new sample update
                         evt = Eyelink( 'NewestFloatSample'); % get the sample in the form of an event structure
@@ -149,12 +153,12 @@ for p = 1:length(pursuit_trial)
                             x = evt.gx(eye_used+1); % if we do, get current gaze position from sample
                             y = evt.gy(eye_used+1); % +1 as we're accessing MATLAB array
                             if x~=el.MISSING_DATA && y~=el.MISSING_DATA && evt.pa(eye_used+1)>0  % do we have valid data and is the pupil visible? if yes, store them
-                                x_resp(i)=x; % store gaze coordinates
-                                y_resp(i)=y;
+                                x_resp(i,t)=x; % store gaze coordinates
+                                y_resp(i,t)=y;
                             else % if data is invalid (e.g. during a blink) draw scotoma in the last valid position
                                 if i>1
-                                    x_resp(i) = x_resp(i-1);
-                                    y_resp(i) = y_resp(i-1);
+                                    x_resp(i,t) = x_resp(i-1,t);
+                                    y_resp(i,t) = y_resp(i-1,t);
                                 end
                             end
                         else % if we don't know what eye is being tracked, find out
@@ -167,7 +171,7 @@ for p = 1:length(pursuit_trial)
                 end
                 vbl = Screen('Flip', w); % flip the screen, updating the position of the stimulus
                 [~,~,buttons]=GetMouse(w);
-                if buttons(2)
+                if any(buttons) && buttons(1)==0
                     sca;
                     return;
                 end
@@ -175,6 +179,10 @@ for p = 1:length(pursuit_trial)
             Eyelink('Message', ['END_TRIAL_' num2str(t) '_' pat_string '_c' num2str(contrast(c))]); % print a message in the .edf file to mark the end of the current trial
             % save .mat file with data specific to the current trial
             filename = [myPath subj '_' pat_string '_c' num2str(contrast(c)) '_' num2str(t)]; % concatenate all the condition strings into a single filename
+            x_resp = x_resp(:,t); % store only the current trial
+            y_resp = y_resp(:,t); 
+            x_stim = x_pos(:,t);
+            y_stim = y_pos(:,t);
             save(filename, 'ifi','hz', 'pat_string','contrast','monitWidth', 'viewDist', 'myPath', 'subj', 'x_stim', 'x_resp', 'y_stim', 'y_resp', 'xScreen', 'yScreen', 'xCenter', 'yCenter');
         end
     end
