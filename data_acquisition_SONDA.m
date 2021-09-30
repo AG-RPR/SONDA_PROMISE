@@ -1,4 +1,7 @@
 clc; sca; close all; clear all; commandwindow;
+screen_calib = readtable('screen_calibration.xlsx');
+screen_calib = screen_calib{:,:};
+screen_calib(:,2) = []; % leave only grayscale values and MINOLTA lum values
 %% default parameters
 if isunix % avoid hardcoding paths so that this trick should be enough to pass from one OS to another
     myPath = [pwd '/'];
@@ -6,20 +9,21 @@ else
     myPath = [pwd '\'];
 end
 cd(myPath); % go to path location
-dummymode = 0; % flag to switch on / off dummymode (trial without eye-tracker) ---> SET BEFORE STARTING
+dummymode = 1; % flag to switch on / off dummymode (trial without eye-tracker) ---> SET BEFORE STARTING
 subj ='demo'; % string variable for subject name
 pursuit_cond = 2; %0: smooth | 1: saccadic | 2: both]
 svfd_number = 0; % number of gaze contingent simulated visual field defect conditions
-background = 127; % THIS VALUE MUST BE ADAPTED FROM THE CALIBRATION OF THE MONITOR
-contrast = [10 100]; % contrast levels, in percentage
+background_lum = 100; % luminance of the background in cd/m2
+contrast = [5 10 20 40 80]; % contrast levels, in percentage
 contrast_levels = length(contrast); % number of contrast levels
-monitWidth = 540; % physical width of the display monitor (mm) ---> MEASURE BEFORE STARTING
+monitWidth = 560; % physical width of the display monitor (mm) ---> MEASURE BEFORE STARTING
 viewDist = 600; % viewing distance of the observer (mm) ---> MEASURE BEFORE STARTING
 %% custom parameters
+disp('REMINDER: be sure that the display runs at 240 Hz');
 default_params = input('Use default paramters? [0: NO| 1: YES]:...');
 if default_params == 0
     pursuit_cond =  input('Which pursuit type do you want to test? [0: smooth | 1: saccadic | 2: both]:...');
-    background = input('Background level? [greyscale 0-255 | default = 127]:...');
+    background_lum = input('Background level? [cd/m2 0-100 | default = 100]:...');
     contrast_levels = input('How many contrast levels? [Integer number]:...');
     contrast = [];
     for c = 1:contrast_levels
@@ -27,15 +31,20 @@ if default_params == 0
     end
     svfd_number = input('How many simulated visual field conditions? [0 = no sVFD | any integer number]:...');
 end
+%% Lookup luminance values from screen calibration file
+[minval, ind] = min(abs(screen_calib(:,2) - background_lum)); % find the available grayscale value closest to background
+background_val = screen_calib(ind,1); % get the correspondent background value;
+stim_lum = background_lum + background_lum.*contrast/100; % get the actual stimuli luminance
+[a,b]=min(abs(screen_calib(:,2) - stim_lum)); % get the corresponding grayscale values indexes
+stim_val = screen_calib(b,1); % final stimuli grayscale values scaled with screen luminance calibration
 %% load trajectories
 load('smooth_1.mat');
-x_smooth(:,1) = x(1:2400); % short, just for trying it out
-y_smooth(:,1) = y(1:2400);
-
+x_smooth(:,1) = x;
+y_smooth(:,1) = y;
 for i = 1:3
-load(['saccadic_' num2str(i) '.mat']);
-x_sacc(:,i) = x(1:length(x_smooth)); % REMOVE THIS INDEX ONCE THE TIME SERIES ARE READY
-y_sacc(:,i) = y(1:length(y_smooth));
+    load(['saccadic_' num2str(i) '.mat']);
+    x_sacc(:,i) = x; % REMOVE THIS INDEX ONCE THE TIME SERIES ARE READY
+    y_sacc(:,i) = y; %(1:length(y_smooth));
 end
 %% Initialze PTB (PsychToolBox) screen & miscellaneous graphic options
 Screen('Preference', 'SkipSyncTests', 1); % skip PTB sync-test
@@ -44,10 +53,18 @@ Screen('Preference', 'VisualDebuglevel', 3); % skip PTB warning
 screenNumber = max(Screen('Screens'));  % get the pointer to the screen (select secondary screen in case of multiple displays)
 white = WhiteIndex(screenNumber); % define white (usually 255)
 grey=GrayIndex(screenNumber); % define gray (usually 127)
-[w, windowRect] = Screen('OpenWindow', 1, background); % open the window object and get a pointer to access that window, initialize the window with a grey background
+[w, windowRect] = Screen('OpenWindow', 1, background_val); % open the window object and get a pointer to access that window, initialize the window with a grey background
 Screen('Flip', w); % initial flip to clean the screen
 ifi = Screen('GetFlipInterval', w); % get interframe interval
 hz = 1/ifi; % get refresh rate
+if hz < 240
+    commandwindow;
+    hz_continue = input('The display refresh rate is lower than 240Hz, do you want to continue? [0: NO| 1: YES | Recommended NO]:...');
+    if hz_continue == 0
+        sca;
+        return;
+    end
+end
 MaxPriority(w); % set top priority
 [xCenter, yCenter] = RectCenter(windowRect); % get central coordinates (resolution-dependent)
 [xScreen, yScreen]= Screen('WindowSize', w); % get screen coordinates (resolution-dependent)
@@ -61,11 +78,9 @@ size_blob=round(deg2pix(size_blob_deg,xScreen,monitWidth, viewDist)); % size of 
 gauss_sigma = size(xg)/4; gauss_sigma=gauss_sigma(1); % standard deviation of the gaussian aperture to mask the stimulus and giving it smooth edges
 gaussian = exp(-((xg/gauss_sigma).^2)-((yg/gauss_sigma).^2)); % gaussian aperture
 for c = 1:contrast_levels % define the stimulus value for each contrast level
-    stimulus_val(c) = background + background*contrast(c)/100;
     gauss_blob{c}(:, :, 2)=  gaussian * white; % alpha layer of the texture containing the gaussian aperture. 255 = transparent, 0 = opaque
-    gauss_blob{c}(:, :, 1) = ones(length(gauss_blob{c}(:,1,2)),length(gauss_blob{c}(:,1,2)))* stimulus_val(c); % background layer of the texture. 255 = white, 0 = black (for colored stimuli, create 4 layers, one for alpha and 3 for RGB)
+    gauss_blob{c}(:, :, 1) = ones(length(gauss_blob{c}(:,1,2)),length(gauss_blob{c}(:,1,2)))* stim_val(c); % background layer of the texture. 255 = white, 0 = black (for colored stimuli, create 4 layers, one for alpha and 3 for RGB)
     tex_blob(c)=Screen('MakeTexture', w, gauss_blob{c}); % create a PTB texture for the stimulus
-    % OLD DEFINITION, MIGHT BE WRONG, CHECK gauss_blob(:, :, 1) = ones(length(gauss_blob(:,1,2)),length(gauss_blob(:,1,2)))* round(white*contrast(lum+1)) + grey; % adjust stimulus contrast depending on the current condition. "contrast" is a 1x2 vector
 end
 rect_blob = [0 0 size_blob size_blob]; % scale the stimulus to the appropriate size in pixel
 rectim = [0 0 75 75]; % used for a fake cursor in dummy mode
@@ -92,12 +107,11 @@ end
 Eyelink('Command', 'link_sample_data = LEFT,RIGHT,GAZE,AREA'); % make sure that we get gaze data from the Eyelink (this is some kind of data formatting)
 EyelinkDoTrackerSetup(el); % calibrate the eye-tracker (standard 9-point calibration)
 EyelinkDoDriftCorrection(el); % do a final calibration check using drift correction
-Screen('FillRect',w,background); % clean the screen and fill it with the specified background
+Screen('FillRect',w,background_val); % clean the screen and fill it with the specified background
 Screen('Flip', w);
 edfFile=[subj '.edf']; %open file with subject name to record data to
 Eyelink('Openfile', edfFile);
 eye_used = -1; % -1 because we don't know yet which eye is available. The EyeLink will change this automatically once it picks-up either eye
-
 %% Display
 switch pursuit_cond
     case 0
@@ -178,7 +192,7 @@ for p = 1:length(pursuit_trial)
             end
             Eyelink('Message', ['END_TRIAL_' num2str(t) '_' pat_string '_c' num2str(contrast(c))]); % print a message in the .edf file to mark the end of the current trial
             % save .mat file with data specific to the current trial
-            filename = [myPath subj '_' pat_string '_c' num2str(contrast(c)) '_' num2str(t)]; % concatenate all the condition strings into a single filename
+            filename = [myPath subj '_' pat_string '_c' num2str(round(contrast(c))) '_' num2str(t) '_' num2str(round(cputime*100000))]; % concatenate all the condition strings into a single filename
             x_resp = x_resp(:,t); % store only the current trial
             y_resp = y_resp(:,t); 
             x_stim = x_pos(:,t);
